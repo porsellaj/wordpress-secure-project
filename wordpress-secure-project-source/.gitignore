@@ -1,0 +1,19 @@
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+
+# Certificados y claves privadas generados en el servidor
+ssl/server.key
+ssl/server.crt
+ssl/*.pem
+ssl/*.key
+
+# Backups, dumps y archivos temporales
+*.sql
+*.sql.gz
+*.dump
+*.bak
+*.log
+.DS_Store
+Thumbs.db
