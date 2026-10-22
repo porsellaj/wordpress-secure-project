@@ -6,6 +6,8 @@ Proyecto académico de despliegue y seguridad de aplicaciones web realizado con 
 
 Desplegar WordPress con una base de datos MariaDB, caché Redis, dos instancias de WordPress detrás de Nginx, y acceso al sitio mediante HTTPS usando un certificado autofirmado. También se contemplan plugins de seguridad para WordPress.
 
+El proyecto sirve como una base de referencia que puede adaptarse según las necesidades, las versiones disponibles y los requisitos del entorno donde se despliegue.
+
 ## 2. Arquitectura
 
 ```text
@@ -35,8 +37,10 @@ Las dos instancias comparten la base de datos y el volumen de archivos de WordPr
 
 ## 3. Estructura del proyecto
 
+Tras clonar el repositorio, entrar en la carpeta `wordpress-secure-project-source/`. Los comandos de instalación y despliegue se ejecutan desde esa carpeta, donde se encuentran los archivos del proyecto.
+
 ```text
-wordpress-secure-project/
+wordpress-secure-project-source/
 ├── README.md
 ├── Dockerfile
 ├── docker-compose.yml
@@ -61,11 +65,24 @@ wordpress-secure-project/
 - Docker Engine y Docker Compose v2.
 - Un nombre DNS o una IP pública para acceder al sitio.
 
+### Elección de versiones
+
+Las versiones definidas en `docker-compose.yml` y `Dockerfile` son puntos de partida que pueden adaptarse al entorno de despliegue. No es obligatorio utilizar exactamente las mismas versiones en todas las implementaciones.
+
+Por ejemplo:
+
+- `wordpress:latest` y `nginx:latest` permiten utilizar las versiones más recientes publicadas bajo esas etiquetas. Sin embargo, el contenido de `latest` puede cambiar con el tiempo.
+- `mariadb:11` y `redis:7-alpine` utilizan etiquetas de versión más específicas, aunque pueden recibir actualizaciones dentro de sus respectivas líneas.
+- Para proyectos que requieran reproducibilidad, pruebas controladas o despliegues más estables, conviene seleccionar etiquetas explícitas compatibles y probadas. También pueden fijarse las imágenes mediante su digest.
+- Antes de cambiar las versiones, se recomienda comprobar su compatibilidad con el resto de los componentes y realizar las pruebas pertinentes.
+
+La selección de versiones depende de los objetivos del entorno: esta configuración ofrece una base que cada usuario puede adaptar y validar antes de utilizarla.
+
 ## 5. Instalación y despliegue
 
 ### Paso 1. Instalar Docker
 
-Si Docker aún no está instalado en Ubuntu:
+Si Docker aún no está instalado en Ubuntu, ejecutar los siguientes comandos desde la instancia EC2:
 
 ```bash
 sudo apt update
@@ -82,7 +99,7 @@ sudo docker compose version
 
 ### Paso 2. Preparar las variables de entorno
 
-Desde la raíz del repositorio:
+Desde la carpeta `wordpress-secure-project-source/`:
 
 ```bash
 cp .env.example .env
@@ -95,18 +112,53 @@ El archivo `.env` no cifra las contraseñas: solo evita escribirlas directamente
 
 ### Paso 3. Crear el certificado TLS autofirmado
 
-Desde la raíz del proyecto:
+Desde la carpeta del proyecto:
 
 ```bash
 mkdir -p ssl nginx
-sudo openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
-  -keyout ssl/server.key \
-  -out ssl/server.crt
 ```
 
-Cuando OpenSSL pregunte por **Common Name (CN)**, escribir la Elastic IP o el nombre DNS que se utilizará para abrir el sitio. La clave privada `ssl/server.key` debe permanecer en el servidor y no debe subirse a GitHub.
+El certificado debe incluir un **Subject Alternative Name (SAN)** que coincida con la dirección utilizada para acceder al sitio. El SAN identifica los nombres DNS o las direcciones IP para las que se ha emitido el certificado; indicar únicamente el Common Name (CN) no es suficiente para la validación moderna de certificados.
 
-El certificado es autofirmado. HTTPS sí cifra la conexión, pero el navegador no puede verificar su identidad usando una autoridad certificadora pública; por eso muestra una advertencia.
+Elegir uno de los siguientes ejemplos, según la dirección que se utilizará.
+
+**Opción A: acceso mediante una dirección IP pública**
+
+Sustituir `TU_IP_PUBLICA` por la Elastic IP de la instancia EC2:
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
+  -keyout ssl/server.key \
+  -out ssl/server.crt \
+  -subj "/CN=TU_IP_PUBLICA" \
+  -addext "subjectAltName=IP:TU_IP_PUBLICA"
+```
+
+Por ejemplo, si la IP fuera `203.0.113.10`, habría que sustituir `TU_IP_PUBLICA` por `203.0.113.10` en ambos lugares. Esta dirección es solo ilustrativa.
+
+**Opción B: acceso mediante un nombre DNS**
+
+Sustituir `ejemplo.com` por el dominio que se utilizará:
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
+  -keyout ssl/server.key \
+  -out ssl/server.crt \
+  -subj "/CN=ejemplo.com" \
+  -addext "subjectAltName=DNS:ejemplo.com"
+```
+
+La clave privada `ssl/server.key` debe permanecer en el servidor y no debe subirse a GitHub.
+
+Se puede restringir el acceso a la clave con:
+
+```bash
+sudo chmod 600 ssl/server.key
+```
+
+El certificado es autofirmado. Aunque el SAN coincida con la dirección utilizada y HTTPS cifre la conexión, el navegador seguirá mostrando una advertencia porque no puede establecer la confianza del certificado a través de una autoridad certificadora reconocida.
+
+Para un servicio público se recomienda utilizar un certificado emitido por una autoridad de confianza.
 
 ### Paso 4. Validar y arrancar la aplicación
 
@@ -129,7 +181,7 @@ sudo docker logs mariadb
 sudo docker logs nginx
 ```
 
-Abrir `https://TU_IP_PUBLICA` y completar el asistente de instalación de WordPress.
+Abrir `https://TU_IP_PUBLICA` o el nombre DNS configurado y completar el asistente de instalación de WordPress.
 
 ### Paso 5. Configurar Redis en WordPress
 
@@ -186,11 +238,19 @@ Cambiar la ruta de inicio de sesión no reemplaza contraseñas fuertes, actualiz
 El archivo `nginx/nginx.conf` define un grupo upstream llamado `wordpress_backend`, que contiene `wordpress:80` y `wordpress2:80`.
 
 - El bloque que escucha en el puerto 80 responde con una redirección **301** a HTTPS.
-- El bloque del puerto 443 carga `server.crt` y `server.key` y permite TLS 1.2.
+- El bloque del puerto 443 carga `server.crt` y `server.key` y permite TLS 1.2 y TLS 1.3, siempre que las versiones de Nginx y OpenSSL utilizadas admitan estos protocolos.
 - `proxy_pass http://wordpress_backend` reenvía la solicitud al grupo de instancias WordPress.
 - Las cabeceras `Host`, `X-Real-IP`, `X-Forwarded-For` y `X-Forwarded-Proto` conservan información sobre el host solicitado, la IP del cliente y el protocolo original.
 
 Nginx termina la conexión TLS y se comunica con WordPress por HTTP dentro de la red privada de Docker. Este diseño cifra el tráfico navegador–Nginx; no cifra por separado el tráfico entre los contenedores en la red Docker.
+
+Si se utiliza la configuración de Nginx incluida en este proyecto, la directiva de protocolos debe configurarse de la siguiente manera:
+
+```nginx
+ssl_protocols TLSv1.2 TLSv1.3;
+```
+
+TLS 1.3 requiere versiones compatibles de Nginx y OpenSSL. Si se modifica la imagen o el entorno de ejecución, comprobar primero que las versiones seleccionadas admiten los protocolos configurados.
 
 ## 7. Pruebas para la sustentación
 
@@ -212,21 +272,39 @@ curl -I http://localhost
 
 Si el puerto 80 está publicado y Nginx está activo, se espera una respuesta `301` con una cabecera `Location` que apunta a HTTPS. Si el puerto 80 está bloqueado en el Security Group, esta comprobación local aún puede funcionar, pero la solicitud HTTP externa no llegará a Nginx.
 
-### C. Comprobar el certificado y la clave RSA
+### C. Comprobar el certificado, la clave RSA y el SAN
 
 ```bash
 openssl x509 -in ssl/server.crt -text -noout | grep -E 'Public-Key|Not Before|Not After'
 ```
 
-La clave pública debe mostrar `4096 bit` con el comando de generación anterior. En el navegador, abrir `https://TU_IP_PUBLICA` y explicar que la advertencia se debe al certificado autofirmado.
+La clave pública debe mostrar `4096 bit` con el comando de generación anterior. Revisar también el SAN:
 
-### D. Comprobar TLS 1.2
+```bash
+openssl x509 -in ssl/server.crt -noout -ext subjectAltName
+```
+
+El resultado debe incluir la IP pública o el nombre DNS correspondiente, según la opción utilizada al generar el certificado.
+
+En el navegador, abrir la dirección configurada y explicar que la advertencia de confianza se debe al certificado autofirmado, no necesariamente a una falta de cifrado de la conexión.
+
+### D. Comprobar TLS 1.2 y TLS 1.3
+
+Para probar TLS 1.2:
 
 ```bash
 openssl s_client -connect TU_IP_PUBLICA:443 -tls1_2 </dev/null
 ```
 
-Revisar la salida y buscar una sesión negociada con TLS 1.2 y un cifrado. Una conexión correcta no elimina la advertencia de confianza del certificado autofirmado.
+Para probar TLS 1.3:
+
+```bash
+openssl s_client -connect TU_IP_PUBLICA:443 -tls1_3 </dev/null
+```
+
+Revisar la salida de cada prueba. Una conexión correcta debe mostrar el protocolo negociado y un cifrado. Si uno de los protocolos no está disponible, revisar la configuración de Nginx y las versiones de Nginx/OpenSSL utilizadas.
+
+En estas pruebas también puede aparecer información sobre la falta de confianza en el certificado autofirmado. Esto no significa por sí solo que el protocolo TLS haya fallado.
 
 ### E. Demostrar que Nginx puede usar la otra instancia
 
@@ -308,10 +386,14 @@ sudo docker compose up -d --build
 - No versionar `.env`, `ssl/server.key`, copias de seguridad ni datos del sitio.
 - Si una contraseña real se compartió en un chat, captura o repositorio, cambiarla antes de usar el sistema fuera del laboratorio.
 - Las contraseñas de ejemplo no deben reutilizarse.
-- El certificado autofirmado sirve para practicar TLS; para un servicio público se necesita un certificado válido y una estrategia de renovación.
+- Las etiquetas de imagen utilizadas pueden adaptarse al entorno. Las etiquetas mutables, como `latest`, pueden apuntar a versiones diferentes con el tiempo; comprobar la compatibilidad de los componentes después de cambiar las imágenes.
+- El certificado autofirmado sirve para practicar TLS. El SAN debe coincidir con la IP o el nombre DNS utilizados, pero no convierte el certificado en uno de confianza pública. Para un servicio público se necesita un certificado válido y una estrategia de renovación.
+- Nginx permite TLS 1.2 y TLS 1.3 en la configuración propuesta, siempre que el entorno seleccionado admita ambos.
+- La clave privada TLS debe mantenerse protegida y fuera del control de versiones.
 - Nginx, WordPress, MariaDB y Redis comparten una sola instancia EC2. Si la instancia falla, todo el sitio deja de estar disponible.
 - Dos instancias de aplicación no equivalen por sí solas a alta disponibilidad: también importan el servidor subyacente, el almacenamiento compartido, la base de datos y la supervisión.
 - ModSecurity no está incluido en la configuración descrita. Añadirlo sería una ampliación, no una función que deba afirmarse como implementada.
+- La configuración sirve como base educativa y debe revisarse, probarse y adaptarse antes de utilizarse en un entorno de producción.
 
 ## 11. Referencias oficiales
 
